@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-
-import tikteck
+from bleak import BleakClient
+import asyncio
 import voluptuous as vol
 
 from homeassistant.components.light import (
@@ -31,7 +31,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {vol.Optional(CONF_DEVICES, default={}): {cv.string: DEVICE_SCHEMA}}
 )
 
-
 def setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
@@ -51,7 +50,6 @@ def setup_platform(
 
     add_entities(lights)
 
-
 class TikteckLight(LightEntity):
     """Representation of a Tikteck light."""
 
@@ -64,22 +62,32 @@ class TikteckLight(LightEntity):
 
     def __init__(self, device):
         """Initialize the light."""
-
-        address = device["address"]
-        self._attr_unique_id = address
+        self._address = device["address"]
+        self._attr_unique_id = self._address
         self._attr_name = device["name"]
         self._attr_brightness = 255
         self._attr_hs_color = [0, 0]
         self._attr_is_on = False
-        self.is_valid = True
-        self._bulb = tikteck.tikteck(address, "Smart Light", device["password"])
-        if self._bulb.connect() is False:
-            self.is_valid = False
-            _LOGGER.error("Failed to connect to bulb %s, %s", address, self.name)
+        self._client = BleakClient(self._address)
+        self.is_valid = asyncio.run(self._connect())
+
+    async def _connect(self):
+        try:
+            await self._client.connect()
+            return True
+        except Exception as e:
+            _LOGGER.error("Failed to connect to bulb %s, %s", self._address, self._attr_name)
+            return False
 
     def set_state(self, red: int, green: int, blue: int, brightness: int) -> bool:
         """Set the bulb state."""
-        return self._bulb.set_state(red, green, blue, brightness)
+        asyncio.run(self._set_state_async(red, green, blue, brightness))
+
+    async def _set_state_async(self, red: int, green: int, blue: int, brightness: int):
+        if not self._client.is_connected:
+            await self._client.connect()
+        # To Implement BLE characteristic here
+        # Self Example: await self._client.write_gatt_char(characteristic_uuid, data)
 
     def turn_on(self, **kwargs: Any) -> None:
         """Turn the specified light on."""
@@ -93,9 +101,9 @@ class TikteckLight(LightEntity):
         if brightness is not None:
             self._attr_brightness = brightness
 
-        rgb = color_util.color_hs_to_RGB(self.hs_color[0], self.hs_color[1])
+        rgb = color_util.color_hs_to_RGB(self._attr_hs_color[0], self._attr_hs_color[1])
 
-        self.set_state(rgb[0], rgb[1], rgb[2], self.brightness)
+        self.set_state(rgb[0], rgb[1], rgb[2], self._attr_brightness)
         self.schedule_update_ha_state()
 
     def turn_off(self, **kwargs: Any) -> None:
